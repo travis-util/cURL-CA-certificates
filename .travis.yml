@@ -1,0 +1,89 @@
+sudo: true
+
+env:
+- PS_FORMAT=user,pid,ppid,nlwp,%mem,args
+
+before_install:
+- sudo aptitude update -Z
+- sudo aptitude install nginx -Z --assume-yes && ps -C nginx
+- pip install --user pexpect
+
+- curlw () { curl --connect-timeout 3 $@ | w3m -dump -T text/html ; }
+# Use tmpfile to be sure that curlw fails when curl fails (function needs to be rewritten)!
+- ping1 () { ping -c 1 $@ ; }
+- icanh=$(curl http://icanhazip.com)
+- ipeth0=$(ip addr show eth0 | grep inet | awk '{ print $2; }' | sed 's/\/.*$//' | head --lines=1)
+
+
+install:
+- install --directory private
+# - openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout private/selfsigned.key -out selfsigned.crt
+- python openssl-req-pexpect.py
+- file selfsigned.crt private/selfsigned.key
+# - openssl dhparam -out dhparam.pem 2048
+- install --directory ~/certs
+- cp selfsigned.crt ~/certs
+- sudo install --directory /root/certs/default
+- sudo mv selfsigned.crt private/selfsigned.key /root/certs/default
+# The key could be stolen between creation and protection!
+- sudo chmod u+r,u-wx,g-rwx,o-rwx /root/certs/default/selfsigned.key # Could be made in pexpect, directory could also be protected.
+
+- sudo mv /etc/nginx/sites-available/default /etc/nginx/sites-available/default.orig
+- sudo cp .nginx-default /etc/nginx/sites-available/default
+- sudo service nginx restart && ps -C nginx
+
+
+script:
+- service nginx status
+- curlw http://localhost
+- curlw  --insecure https://localhost
+- curlw --cacert ~/certs/selfsigned.crt https://localhost
+- env CURL_CA_BUNDLE=~/certs/selfsigned.crt curl --connect-timeout 3 https://localhost | w3m -dump -T text/html
+- echo cacert=~/certs/selfsigned.crt | curl --config - --connect-timeout 3 https://localhost | w3m -dump -T text/html
+#^ This is more about curl than nginx!
+
+- curlw https://localhost
+
+- curlw https://$ipeth0 --cacert ~/certs/selfsigned.crt
+
+
+after_script:
+- openssl s_client -connect localhost:443 | head --lines=8
+- w3m -dump https://localhost & w3mpid=$! ; sleep 1 ; kill $w3mpid
+- file ~/certs/selfsigned.crt
+- sudo file /root/certs/default/selfsigned.crt /root/certs/default/selfsigned.key
+- man nginx
+- nginx -V
+- dpkg --listfiles nginx
+- dpkg --listfiles nginx-common
+- dpkg --listfiles nginx-core
+- ls --color --recursive /etc/nginx
+- cat /etc/nginx/nginx.conf
+- cat /etc/nginx/sites-available/default
+- grep 'server_name.*;$' /etc/nginx/sites-available/*
+- cat /etc/default/nginx
+- ls --color /usr/share/nginx/html
+- w3m -dump /usr/share/nginx/html/index.html
+- w3m -dump /usr/share/nginx/html/50x.html
+- ps -C nginx
+- ls -A --color /var/www
+- man curl
+
+- ping1 $ipeth0
+- curlw $ipeth0
+- curlw https://$ipeth0
+- curlw https://$ipeth0 --insecure
+- ping1 $icanh
+- curlw $icanh
+
+#- curlw --capath ~/certs --cacert selfsigned.crt https://localhost
+- curlw --capath ~/certs https://localhost
+#^ Not working probably because directory has not been processed by c_rehash.
+- c_rehash ~/certs
+- ls --color ~/certs
+- curlw --capath ~/certs https://localhost
+- man c_rehash
+
+#- env CURL_CA_BUNDLE=~/certs curl --cacert selfsigned.crt --connect-timeout 3 https://localhost | w3m -dump -T text/html
+- env CURL_CA_BUNDLE=~/certs curl --connect-timeout 3 https://localhost | w3m -dump -T text/html
+# CURL_CA_BUNDLE seems to be for files, not directories!
